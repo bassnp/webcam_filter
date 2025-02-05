@@ -76,6 +76,7 @@ def hue_filter(frame, model):
         name = 'idiot' if name == 'person' else name
         draw_ai_label(blend, name, x, y, -1, conf)
 
+
     return blend
 
 def main(filter_name):
