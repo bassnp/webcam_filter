@@ -122,4 +122,4 @@ def main(filter_names=None):
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    main(["top_hat"])
+    main(["hue"])
