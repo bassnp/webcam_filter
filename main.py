@@ -45,10 +45,9 @@ def ai_filter(frame, model):
         name = model.names[int(cls)]
         r, g, b = int_to_clr(int(cls))
 
-        if name not in sightings: # Quick log
+        if name not in sightings:
             sightings.append(name)
 
-        # draw_ai_box(frame, box, name, r, g, b)
         draw_ai_box(frame, box, name, r, g, b)
 
     return frame, sightings
@@ -62,20 +61,20 @@ def hue_filter(frame, model):
     dark_img  = np.full(image_gray.shape, (0, 0, 0), np.uint8)
     blend = cv2.addWeighted(image_gray, 0.4, dark_img, 0.4, 1.0)
 
+    # Combine all hue blends
     for box in boxes:
         x, y, x2, y2, conf, cls = box
         x, y = int(x), int(y)
         w, h = int(x2-x), int(y2-y)
         blend[y:y+h, x:x+w] = frame[y:y+h, x:x+w]
 
+    # Draw afterwards
     for box in boxes:
         x, y, x2, y2, conf, cls = box
         x, y = int(x), int(y)
-        w, h = int(x2-x), int(y2-y)
         name = model.names[int(cls)]
         name = 'idiot' if name == 'person' else name
         draw_ai_label(blend, name, x, y, -1, conf)
-
 
     return blend
 
@@ -85,7 +84,7 @@ def main(filter_name):
     print("Using " + str(device))
 
     # Image scanning model
-    model = torch.hub.load('ultralytics/yolov5', 'yolov5x')
+    model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
     model.to(device)
 
     # Webcam capture
