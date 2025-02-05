@@ -34,9 +34,7 @@ def draw_ai_box(frame, box, txt, r, g, b):
     blend_rect(frame, x, y, w, h, clr)
     draw_ai_label(frame, txt, x, y, clr, conf)
 
-def ai_filter(frame, model):
-    results = model(frame)
-    boxes = results.xyxy[0].cpu().numpy()
+def ai_filter(frame, boxes, model):
     sightings = []
 
     for box in boxes:
@@ -49,13 +47,9 @@ def ai_filter(frame, model):
             sightings.append(name)
 
         draw_ai_box(frame, box, name, r, g, b)
-
     return frame, sightings
 
-def hue_filter(frame, model):
-    results = model(frame)
-    boxes = results.xyxy[0].cpu().numpy()
-
+def hue_filter(frame, boxes, model):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     image_gray = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     dark_img  = np.full(image_gray.shape, (0, 0, 0), np.uint8)
@@ -75,11 +69,11 @@ def hue_filter(frame, model):
         name = model.names[int(cls)]
         name = 'idiot' if name == 'person' else name
         draw_ai_label(blend, name, x, y, -1, conf)
-
-
     return blend
 
-def main(filter_name):
+def main(filter_names=None):
+    if filter_names is None:
+        filter_names = []
     print(torch.__version__)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using " + str(device))
@@ -100,14 +94,17 @@ def main(filter_name):
         while cap.isOpened():
             ret, frame = cap.read() # Read webcam frame/image
             if ret is not None and frame is not None:
-                # Switch desired filter name
-                frame_filtered = None
-                if filter_name == "ai":
-                    frame_filtered, sightings = ai_filter(frame, model)
-                elif filter_name == "hue":
-                    frame_filtered = hue_filter(frame, model)
-                else: # Default
-                    frame_filtered = frame
+                # Pre-scan frame
+                results = model(frame)
+                boxes = results.xyxy[0].cpu().numpy()
+
+                frame_filtered = frame
+                for filter_name in filter_names:
+                    # Switch desired filter name
+                    if filter_name == "ai":
+                        frame_filtered, sightings = ai_filter(frame_filtered, boxes, model)
+                    elif filter_name == "hue":
+                        frame_filtered = hue_filter(frame_filtered, boxes, model)
 
                 # Show window debug
                 half_size_frame = cv2.resize(frame_filtered, (0, 0), fx=0.3, fy=0.3)
@@ -125,4 +122,4 @@ def main(filter_name):
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    main("hue")
+    main(["top_hat"])
