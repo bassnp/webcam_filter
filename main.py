@@ -1,3 +1,4 @@
+#2/4/25
 from math import floor
 import cv2
 import torch
@@ -6,10 +7,15 @@ import pyvirtualcam
 from pyvirtualcam import PixelFormat
 import numpy as np
 
+# Load classifiers
+eye_cascade = cv2.CascadeClassifier('haarcascade_eye.xml')
+face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+
 def int_to_clr(n):
-    r = int((math.sin(n) * 1000) % 256)
-    g = int((math.cos(n) * 1000) % 256)
-    b = int((math.tan(n) * 1000) % 256)
+    seed = 390
+    r = int((math.sin(n) * seed) % 256)
+    g = int((math.cos(n) * seed) % 256)
+    b = int((math.tan(n) * seed) % 256)
     return r, g, b
 
 def blend_rect(frame, x, y, w, h, clr):
@@ -18,19 +24,22 @@ def blend_rect(frame, x, y, w, h, clr):
     blend = cv2.addWeighted(sub_img, 0.35, shader_img, 0.35, 1.0)
     frame[y:y+h, x:x+w] = blend
 
+def outline_text(frame, txt, x, y, clr, size, thickness):
+    cv2.putText(frame, txt, (x, y), cv2.FONT_HERSHEY_TRIPLEX, size, (0, 0, 0), thickness + 2)
+    cv2.putText(frame, txt, (x, y), cv2.FONT_HERSHEY_TRIPLEX, size, clr, thickness)
+
 def draw_ai_label(frame, txt, x, y, clr, conf):
     conf_perc = floor(conf * 10000) / 100
     conf_brightness = int(conf * 256)
     conf_blackwhite = (conf_brightness, conf_brightness, conf_brightness)
-    cv2.putText(frame, txt, (int(x + 5), int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, clr if clr != -1 else conf_blackwhite, 1)
-    cv2.putText(frame, str(conf_perc), (int(x + 5), int(y + 15)), cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.8, conf_blackwhite, 1)
+    outline_text(frame, txt, x + 1, y - 8, clr if clr != -1 else conf_blackwhite, 0.8, 1)
+    outline_text(frame, str(conf_perc), x + 3, y + 12, clr if clr != -1 else conf_blackwhite, 0.4, 1)
 
 def draw_ai_box(frame, box, txt, r, g, b):
     x, y, x2, y2, conf, cls = box
     x, y = int(x), int(y)
     w, h = int(x2-x), int(y2-y)
     clr = (r, g, b)
-
     blend_rect(frame, x, y, w, h, clr)
     draw_ai_label(frame, txt, x, y, clr, conf)
 
@@ -49,37 +58,61 @@ def ai_filter(frame, boxes, model):
         draw_ai_box(frame, box, name, r, g, b)
     return frame, sightings
 
-def hue_filter(frame, boxes, model):
+def deepfry_filter(frame, boxes, model):
+    # Init frame filters
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     image_gray = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    dark_img  = np.full(image_gray.shape, (0, 0, 0), np.uint8)
-    blend = cv2.addWeighted(image_gray, 0.4, dark_img, 0.4, 1.0)
+    dark_img = cv2.convertScaleAbs(image_gray, alpha=0.5, beta=0)
+    invert_img = cv2.bitwise_not(frame)
+    saturated_image = cv2.convertScaleAbs(frame, alpha=1.2, beta=0)
 
-    # Combine all hue blends
-    for box in boxes:
-        x, y, x2, y2, conf, cls = box
-        x, y = int(x), int(y)
-        w, h = int(x2-x), int(y2-y)
-        blend[y:y+h, x:x+w] = frame[y:y+h, x:x+w]
+    use_frame = dark_img
 
-    # Draw afterwards
-    for box in boxes:
-        x, y, x2, y2, conf, cls = box
+    # 1. Invert color of things first
+    for (x1, y1, x2, y2, conf, cls) in boxes:
+        if model.names[int(cls)] != 'person':
+            x, y, w, h = int(x1), int(y1), int(x2-x1), int(y2-y1)
+            use_frame[y:y+h, x:x+w] = invert_img[y:y+h, x:x+w]
+
+    # 2. Select persons only
+    for (x1, y1, x2, y2, conf, cls) in boxes:
+        if model.names[int(cls)] == 'person':
+            x, y, w, h = int(x1), int(y1), int(x2-x1), int(y2-y1)
+
+            person = frame[y:y+h, x:x+w]
+            use_frame[y:y+h, x:x+w] = saturated_image[y:y+h, x:x+w]
+
+            # Detection via cascade classifiers
+            faces = face_cascade.detectMultiScale(person, 1.3, 5)
+            for (fx, fy, fw, fh) in faces:
+                _x1, _y1, _x2, _y2 = x+fx, y+fy, x+fx+fw, y+fy+fh
+                use_frame[_y1:_y2, _x1:_x2] = cv2.flip(saturated_image[_y1:_y2, _x1:_x2], 0)
+
+                eyes = eye_cascade.detectMultiScale(person, 1.3, 5)
+                for eye in eyes:
+                    ex, ey, ew, eh = eye
+                    _x, _y, _w, _h = x+ex, y+ey, ew, eh
+                    use_frame[_y:_y+_h, _x:_x+_w] = saturated_image[_y:_y+_h, _x:_x+_w]
+
+    # 3. Draw All AI labels
+    for (x, y, x2, y2, conf, cls) in boxes:
         x, y = int(x), int(y)
         name = model.names[int(cls)]
-        name = 'idiot' if name == 'person' else name
-        draw_ai_label(blend, name, x, y, -1, conf)
-    return blend
+        name = 'dumbass' if name == 'person' else name
+        draw_ai_label(use_frame, name, x, y, -1, conf)
+
+    return use_frame
 
 def main(filter_names=None):
     if filter_names is None:
         filter_names = []
+
     print(torch.__version__)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using " + str(device))
 
     # Image scanning model
-    model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
+    model = torch.hub.load('ultralytics/yolov5', 'yolov5x')
     model.to(device)
 
     # Webcam capture
@@ -103,11 +136,11 @@ def main(filter_names=None):
                     # Switch desired filter name
                     if filter_name == "ai":
                         frame_filtered, sightings = ai_filter(frame_filtered, boxes, model)
-                    elif filter_name == "hue":
-                        frame_filtered = hue_filter(frame_filtered, boxes, model)
+                    elif filter_name == "deepfry":
+                        frame_filtered = deepfry_filter(frame_filtered, boxes, model)
 
                 # Show window debug
-                half_size_frame = cv2.resize(frame_filtered, (0, 0), fx=0.3, fy=0.3)
+                half_size_frame = cv2.resize(frame_filtered, (0, 0), fx=0.4, fy=0.4)
                 cv2.imshow("webcam", half_size_frame)
                 cv2.setWindowProperty("webcam", cv2.WND_PROP_TOPMOST, 1)
 
@@ -122,4 +155,4 @@ def main(filter_names=None):
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    main(["hue"])
+    main(["deepfry"])
